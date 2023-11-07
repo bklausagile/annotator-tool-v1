@@ -6,8 +6,10 @@ import json
 
 from PyQt5 import QtWidgets, uic
 import sys, os
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5 import QtCore, QtGui
 
@@ -17,6 +19,7 @@ class Exemplars:
     jsonObj = None
 
     def __init__(self, exemplarPath):
+        self.jsonObj = []
         self.exemplarPath = exemplarPath
 
     def loadingExemplars(self):
@@ -43,13 +46,15 @@ class Exemplars:
     def getSubtaskData(self, task_id):
         subtasks = []
         states = []
+        observations = []
         demonstrations = self.jsonObj[task_id]['Demonstrations']
         for demonstration in demonstrations:
             for demonstration_obj in demonstration:
                 subtasks.append(demonstration_obj['Reformation'])
                 states.append(demonstration_obj['State'])
+                observations.append(demonstration_obj['Observation'][0])
                 break
-        return subtasks, states
+        return subtasks, states, observations
 
     def removeTask(self, task_id):
         self.jsonObj.pop(task_id)
@@ -151,7 +156,7 @@ class Ui(QtWidgets.QDialog):
         self.but_getstate.clicked.connect(self.but_getstate_clicked)
         self.but_append.clicked.connect(self.but_append_clicked)
         self.but_clear.clicked.connect(self.but_clear_clicked)
-        self.input_url.setText('https://www.booking.com/flights')
+        self.input_url.setText('https://www.google.com/travel/flights')
         self.list_task.itemDoubleClicked.connect(self.list_task_selected)
         self.list_task.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.list_task_content.itemDoubleClicked.connect(self.list_task_content_selected)
@@ -220,13 +225,15 @@ class Ui(QtWidgets.QDialog):
                 x.append(txt)
             for txt in x:
                 if txt in task_ids:
-                    self.exemplarObj.removeTask(txt)
-                    self.refresh_listtask()
+                    if self.exemplarObj != None:
+                        self.exemplarObj.removeTask(txt)
+                        self.refresh_listtask()
 
     def refresh_listtask(self):
-        self.list_task.clear()
-        task_ids = self.exemplarObj.getAllTaskIds()
-        self.list_task.addItems(task_ids)
+        if self.exemplarObj != None:
+            self.list_task.clear()
+            task_ids = self.exemplarObj.getAllTaskIds()
+            self.list_task.addItems(task_ids)
 
     def but_delete_clicked(self):
         items = self.list_task_content.selectedItems()
@@ -244,7 +251,8 @@ class Ui(QtWidgets.QDialog):
                         if userResponse == QMessageBox.Yes:
                             self.task_result.pop(ind)
                             self.input_subtask.setText("")
-                            self.input_state.setText("")
+                            self.input_state.setPlainText("")
+                            self.input_observation.setPlainText("")
                         break
                     ind = ind + 1
                 self.renderTaskResult()
@@ -259,13 +267,14 @@ class Ui(QtWidgets.QDialog):
         self.input_task_id.setText(item.text())
         task = self.exemplarObj.getTaskData(item.text())
         self.input_task.setText(task)
-        subtasks, states = self.exemplarObj.getSubtaskData(item.text())
+        subtasks, states, observations = self.exemplarObj.getSubtaskData(item.text())
         self.task_result = []
         ind = 0
         for subtask in subtasks:
             obj = {}
             obj['title'] = subtask
             obj['state'] = states[ind]
+            obj['observation'] = observations[ind]
             obj['response'] = ''
             self.task_result.append(obj)
             ind = ind + 1
@@ -279,7 +288,8 @@ class Ui(QtWidgets.QDialog):
             for subtask in self.task_result:
                 if subtask['title'] == subtask_title:
                     self.input_subtask.setText(subtask['title'])
-                    self.input_state.setText(subtask['state'])
+                    self.input_observation.setPlainText(subtask['observation'])
+                    self.input_state.setPlainText(subtask['state'])
                     # self.list_actions.clear()
                     # list = []
                     # for item in subtask['response']:
@@ -304,7 +314,7 @@ class Ui(QtWidgets.QDialog):
             subtask_string['state'] = subtask['state']
             if kk == 0:
                 task_result_string['initial_state'] = subtask['state']
-            subtask_string['observation'] = ''
+            subtask_string['observation'] = subtask['observation']
             subtask_string['actions'] = []
             for response in subtask['response']:
                 action_string = {}
@@ -334,7 +344,7 @@ class Ui(QtWidgets.QDialog):
 
     def but_getstate_clicked(self):
         states = self.webBrowser.getInitialState()
-        self.input_state.setText("\n".join(states))
+        self.input_state.setPlainText("\n".join(states))
 
     def but_append_clicked(self):
         if self.input_subtask.toPlainText() == "":
@@ -350,17 +360,20 @@ class Ui(QtWidgets.QDialog):
             subtask = {}
             subtask['title'] = self.input_subtask.toPlainText()
             subtask['state'] = self.input_state.toPlainText()
+            subtask['observation'] = self.input_observation.toPlainText()
             subtask['response'] = self.webBrowser.getResponse()
             self.task_result.append(subtask)
         elif userResponse == QMessageBox.No:
             self.task_result[self.subtask_selected]['title'] = self.input_subtask.toPlainText()
             self.task_result[self.subtask_selected]['state'] = self.input_state.toPlainText()
+            self.task_result[self.subtask_selected]['observation'] = self.input_observation.toPlainText()
             if self.task_result[self.subtask_selected]['response'] == "":
                 self.task_result[self.subtask_selected]['response']= self.webBrowser.getResponse()
             self.subtask_selected = -1
 
         self.input_subtask.setText("")
-        self.input_state.setText("")
+        self.input_state.setPlainText("")
+        self.input_observation.setPlainText("")
         self.state = ''
         self.webBrowser.clearCache()
         self.renderTaskResult()
@@ -612,7 +625,9 @@ class WebBrowserPlay:
         while True:
             if self.gobuttonclick == 1:
                 if self.driveropened == 0:
-                    self.driver = webdriver.Chrome(executable_path=self.chromedriverpath)
+                    service = Service(ChromeDriverManager().install())
+                    self.driver = webdriver.Chrome(service=service)
+                    # self.driver = webdriver.Chrome(executable_path=self.chromedriverpath)
                     self.driver.get(self.url)
 
                     self.appendJS()
@@ -633,13 +648,19 @@ class WebBrowserPlay:
         response = ''
         if self.driver != None:
             script = 'if (typeof value !== "undefined") return value; else return "";'
-            response = self.driver.execute_script(script)
+            try:
+                response = self.driver.execute_script(script)
+            except:
+                response = ''
         return response
 
     def testJS(self):
         if self.driver != None:
             script = 'if (typeof value !== "undefined") return 1; else return 0;'
-            response = self.driver.execute_script(script)
+            try:
+                response = self.driver.execute_script(script)
+            except:
+                response = ''
             if (response == 1):
                 print('Success')
             else:
@@ -649,7 +670,10 @@ class WebBrowserPlay:
     def clearCache(self):
         if self.driver != None:
             script = 'value = [];'
-            response = self.driver.execute_script(script)
+            try:
+                response = self.driver.execute_script(script)
+            except:
+                response = ''
 
     def extract_placeholder(self, html, placeholder):
         # Parse the HTML
@@ -697,6 +721,22 @@ class WebBrowserPlay:
                     important_elements.append(li_element)
                 except:
                     important_elements.append(li_element)
+                selenium_elements.append(element)
+                i = i + 1
+            except:
+                pass
+
+        for element in button_elements:
+            try:
+                button_element = element.text
+                try:
+                    button_element = button_element.strip().replace("\n", " ")
+                    # print('button is', button_element)
+                    if button_element != '':
+                        button_element = '<button> ' + button_element + '</button' + f'-- input element index = {i}'
+                        important_elements.append(button_element)
+                except:
+                    important_elements.append(button_element)
                 selenium_elements.append(element)
                 i = i + 1
             except:
