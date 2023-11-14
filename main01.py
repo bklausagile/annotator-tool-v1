@@ -4,6 +4,8 @@ from time import sleep
 from threading import Thread
 import json
 
+from selenium.webdriver.common.keys import Keys
+
 from PyQt5 import QtWidgets, uic
 import sys, os
 from webdriver_manager.chrome import ChromeDriverManager
@@ -134,6 +136,7 @@ class Ui(QtWidgets.QDialog):
     jsonObj = None
     exemplarObj = None
     webBrowser = None
+    replayBrowser = None
     task_result = None
     state = ''
     subtask_selected = -1
@@ -146,6 +149,7 @@ class Ui(QtWidgets.QDialog):
         uic.loadUi("window.ui", self)
 
         # Initialize
+        self.but_replay.clicked.connect(self.but_replay_clicked)
         self.but_testjs.clicked.connect(self.but_testjs_clicked)
         self.but_open.clicked.connect(self.but_open_clicked)
         self.but_export.clicked.connect(self.but_export_clicked)
@@ -156,6 +160,7 @@ class Ui(QtWidgets.QDialog):
         self.but_getstate.clicked.connect(self.but_getstate_clicked)
         self.but_append.clicked.connect(self.but_append_clicked)
         self.but_clear.clicked.connect(self.but_clear_clicked)
+        # self.input_url.setText('https://www.booking.com/flights')
         self.input_url.setText('https://www.google.com/travel/flights')
         self.list_task.itemDoubleClicked.connect(self.list_task_selected)
         self.list_task.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
@@ -179,6 +184,62 @@ class Ui(QtWidgets.QDialog):
                         list.append(list_item)
 
                     self.list_actions.addItems(list)
+
+    def but_replay_clicked(self):
+        actions = []
+
+        # response = {}
+        # response['action'] = 'click'
+        # response['tagname'] = 'input'
+        # response['content'] = ''
+        # response['ind'] = 0
+        # actions.append(response)
+        #
+        # response = {}
+        # response['action'] = 'type'
+        # response['tagname'] = 'input'
+        # response['content'] = 'London'
+        # response['ind'] = 3
+        # actions.append(response)
+        #
+        # response = {}
+        # response['action'] = 'press enter'
+        # response['tagname'] = 'input'
+        # response['content'] = ''
+        # response['ind'] = 3
+        # actions.append(response)
+        #
+        # response = {}
+        # response['action'] = 'click'
+        # response['tagname'] = 'input'
+        # response['content'] = ''
+        # response['ind'] = 2
+        # actions.append(response)
+        #
+        # response = {}
+        # response['action'] = 'type'
+        # response['tagname'] = 'input'
+        # response['content'] = 'Paris'
+        # response['ind'] = 3
+        # actions.append(response)
+        for subtask in self.task_result:
+            for response in subtask['response']:
+                actions.append(response)
+                print(response)
+            response = {}
+            response['action'] = 'wait'
+            response['tagName'] = ''
+            response['content'] = ''
+            response['ind'] = ''
+            response['innertext'] = ''
+            response['attributes'] = {}
+            print(response)
+            actions.append(response)
+        # print(actions)
+        # exit()
+        chromedriverpath = os.path.join(self.folderPath, "chromedriver.exe")
+        self.replayBrowser = WebBrowserReplay(self.input_url.text(), chromedriverpath, actions)
+        self.replayBrowser.runn()
 
     def but_testjs_clicked(self):
         if self.webBrowser != None:
@@ -356,6 +417,7 @@ class Ui(QtWidgets.QDialog):
         userResponse = QMessageBox.question(self, 'Question', "Will you add a subtask newly or update?",
                                             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Cancel)
 
+        cancelflg = 1
         if userResponse == QMessageBox.Yes:
             subtask = {}
             subtask['title'] = self.input_subtask.toPlainText()
@@ -363,6 +425,7 @@ class Ui(QtWidgets.QDialog):
             subtask['observation'] = self.input_observation.toPlainText()
             subtask['response'] = self.webBrowser.getResponse()
             self.task_result.append(subtask)
+            cancelflg = 0
         elif userResponse == QMessageBox.No:
             self.task_result[self.subtask_selected]['title'] = self.input_subtask.toPlainText()
             self.task_result[self.subtask_selected]['state'] = self.input_state.toPlainText()
@@ -370,13 +433,15 @@ class Ui(QtWidgets.QDialog):
             if self.task_result[self.subtask_selected]['response'] == "":
                 self.task_result[self.subtask_selected]['response']= self.webBrowser.getResponse()
             self.subtask_selected = -1
+            cancelflg = 0
 
-        self.input_subtask.setText("")
-        self.input_state.setPlainText("")
-        self.input_observation.setPlainText("")
-        self.state = ''
-        self.webBrowser.clearCache()
-        self.renderTaskResult()
+        if cancelflg == 0:
+            self.input_subtask.setText("")
+            self.input_state.setPlainText("")
+            self.input_observation.setPlainText("")
+            self.state = ''
+            self.webBrowser.clearCache()
+            self.renderTaskResult()
 
     def renderTaskResult(self):
         self.list_task_content.clear()
@@ -391,6 +456,100 @@ class Ui(QtWidgets.QDialog):
                 items.append(text)
 
         self.list_task_content.addItems(items)
+
+class WebBrowserReplay:
+
+    actions = None
+    gobuttonclick = 0
+    driveropened = 0
+    timelimit = 3
+
+    def __init__(self, url, chromedriverpath, actions):
+        self.driver = None
+        self.url = url
+        self.chromedriverpath = chromedriverpath
+        self.actions = actions
+        self.thread = Thread(target=self.worker)
+        self.thread.start()
+        self.gobuttonclick = 0
+        self.driveropened = 0
+        self.timelimit = 10
+
+    def close(self):
+        # self.threadStopFlag = 1;
+        # self.thread.join()
+        self.driver.quit()
+        self.driver = None
+
+    def worker(self):
+        while True:
+            if self.gobuttonclick == 1:
+                if self.driveropened == 0:
+                    if self.actions != None:
+                        service = Service(ChromeDriverManager().install())
+                        self.driver = webdriver.Chrome(service=service)
+                        # self.driver = webdriver.Chrome(executable_path=self.chromedriverpath)
+
+                        self.driver.get(self.url)
+
+                        sleep(5)
+                        accept = 1
+                        try:
+                            accept_links = self.driver.find_elements(By.ID, "onetrust-accept-btn-handler")
+                            for accept_link in accept_links:
+                                accept_link.click()
+                        except:
+                            accept = 0
+
+                        sleep(5)
+
+                        for action in self.actions:
+                            if action['action'] != 'wait':
+                                elements = self.driver.find_elements(By.TAG_NAME, action['tagName'])
+                                ind = 0
+                                for element in elements:
+                                    if element.get_attribute('class') == action['cls']:
+                                        if action['tagName'] == 'LI':
+                                            ss = action['innertext'].encode('utf-8')
+                                            ss = ss.replace(b"\xc2\xa0", b" ")
+                                            tt = element.text.encode('utf-8')
+                                            if ss == tt:
+                                                element.click()
+                                                break
+                                        elif self.url == 'https://www.booking.com/flights' and action['tagName'] == 'SPAN':
+                                            ss = action['attributes']['data-date']
+                                            tt = element.get_attribute('data-date')
+                                            if ss == tt:
+                                                element.click()
+                                                break
+                                        else:
+                                            if (action['ind'] == ind):
+                                                if (action['action'] == 'click'):
+                                                    element.click()
+                                                elif (action['action'] == 'type'):
+                                                    element.send_keys(action['content'])
+                                                elif (action['action'] == 'press enter'):
+                                                    element.send_keys(Keys.RETURN)
+                                                elif (action['action'] == 'press tab'):
+                                                    element.send_keys(Keys.TAB)
+                                                elif (action['action'] == 'press backspace'):
+                                                    element.send_keys(Keys.BACKSPACE)
+                                                print(action['tagName'] + ' : ' + action['action'])
+                                                break
+                                            ind = ind + 1
+                                sleep(self.timelimit)
+                            else:
+                                print('waiting')
+                                sleep(20)
+
+                        print('Done')
+                        # QMessageBox.information(self, 'Notification', 'Done!')
+                        self.driveropened = 1
+
+    def runn(self):
+        self.driveropened = 0
+        self.gobuttonclick = 1
+
 
 class WebBrowserPlay:
 
@@ -466,13 +625,44 @@ class WebBrowserPlay:
             window.processElement = function(node)
             {
                 var ret = '';
-                var nodes = document.getElementsByTagName(node.tagName);
+                var ind = -1;
+                var tagname=  '';
+                var allnodes = document.getElementsByTagName(node.tagName);
+                var nodes = [];
+                for (var k = 0; k < allnodes.length; k++)
+                {
+                    if (window.location.hostname == 'www.booking.com' && node.tagName == 'SPAN' && node.hasAttribute('data-date') == true)
+                    {
+                        if (allnodes[k].className == 'Calendar-module__date___8T8Mp')
+                            nodes.push(allnodes[k]);
+                    }
+                    else
+                    {
+                        if (allnodes[k].className == node.className)
+                            nodes.push(allnodes[k]);
+                    }
+                }
                 for (var k = 0; k < nodes.length; k++)
                 {
+                    ind = k;
+                    tagname = node.tagName.toLowerCase();
                     var flg = 0;
                     if (node.tagName.toLowerCase() == 'input')
                     {
                         if (compare(nodes[k], node) == 1)
+                            flg = 1;
+                    }
+                    else if (node.tagName.toLowerCase() == 'span')
+                    {
+                        if (window.location.hostname == 'www.booking.com')
+                        {
+                            if (nodes[k].getAttribute('data-date') == node.getAttribute('data-date'))
+                                flg = 1;
+                        }
+                    }
+                    else if (node.tagName.toLowerCase() == 'button')
+                    {
+                        if (node.innerText == nodes[k].innerText && node.className == nodes[k].className)
                             flg = 1;
                     }
                     else
@@ -489,18 +679,31 @@ class WebBrowserPlay:
                             ret = '<li>' + node.innerText + '</li>-- input element index = ' + k;
                         else if (node.tagName.toLowerCase() == 'button')
                             ret = '<button>' + node.innerText + '</button>-- input element index = ' + k;
+                        else if (node.tagName.toLowerCase() == 'span')
+                            ret = '<span>' + node.innerText + '</span>-- input element index = ' + k;
+                        else if (node.tagName.toLowerCase() == 'td')
+                            ret = '<td>' + node.innerText + '</td>-- input element index = ' + k;
                         break;
                     }
                 }
-                return ret;
+                var obj = {};
+                obj[0] = ret;
+                obj[1] = ind;
+                return obj;
             }
             window.addClickObj = function(node)
             {
                 var obj = {};
                 obj['action'] = 'click';
-                obj['elem'] = processElement(node);
+                var rt = processElement(node);
+                obj['elem'] = rt[0];
+                obj['ind'] = rt[1];
                 obj['content'] = '';
                 obj['tagName'] = node.tagName;
+                obj['innertext'] = node.innerText;
+                obj['cls'] = node.className;
+                if (window.location.hostname == 'www.booking.com' && node.tagName == 'SPAN' && node.hasAttribute('data-date') == true)
+                    obj['cls'] = 'Calendar-module__date___8T8Mp';
                 obj['attributes'] = {};
                 for (var kk = 0; kk < node.attributes.length; kk++)
                     obj['attributes'][node.attributes[kk].nodeName] = node.attributes[kk].nodeValue;
@@ -508,7 +711,7 @@ class WebBrowserPlay:
                 value.push(obj);
             }
             
-            document.addEventListener("click", clickHandler, true);
+            document.addEventListener("mousedown", clickHandler, true);
             
             function clickHandler(e) 
             {
@@ -517,7 +720,7 @@ class WebBrowserPlay:
                 var found = 0;
                 while (true)
                 {
-                    if (node.tagName.toLowerCase() == "input" || node.tagName.toLowerCase() == "li" || node.tagName.toLowerCase() == "button")
+                    if (node.tagName.toLowerCase() == "input" || node.tagName.toLowerCase() == "li" || node.tagName.toLowerCase() == "button" || (window.location.hostname == 'www.booking.com' && node.tagName.toLowerCase() == "span" && node.hasAttribute('class') == true && node.hasAttribute('data-date') == true))
                     {
                         found = 1;
                         break;
@@ -560,28 +763,60 @@ class WebBrowserPlay:
             }
 
             document.addEventListener("keyup", keyHandler, true);
-
-            function keyHandler(event)
+            document.addEventListener("keydown", keyDownHandler, true);
+            
+            function keyDownHandler(event)
             {
                 if (event.keyCode == 13) // New Line
                 {
                     var obj = {};
                     obj['action'] = 'press enter';
-                    obj['elem'] = processElement(event.target);
+                    var rt = processElement(event.target);
+                    obj['elem'] = rt[0];
+                    obj['ind'] = rt[1];
                     obj['content'] = '';
+                    obj['cls'] = event.target.className;
                     obj['tagName'] = event.target.tagName;
+                    obj['innertext'] = event.target.innerText;
                     obj['attributes'] = {};
                     for (var kk = 0; kk < event.target.attributes.length; kk++)
                         obj['attributes'][event.target.attributes[kk].nodeName] = event.target.attributes[kk].nodeValue;
                     value.push(obj);
                 }
+            }
+
+            function keyHandler(event)
+            {
+                if (event.keyCode == 13) // New Line
+                {
+                }
                 else if (event.keyCode == 9) // Tab
                 {
                     var obj = {};
                     obj['action'] = 'press tab';
-                    obj['elem'] = processElement(event.target);
+                    var rt = processElement(event.target);
+                    obj['elem'] = rt[0];
+                    obj['ind'] = rt[1];
                     obj['content'] = '';
                     obj['tagName'] = event.target.tagName;
+                    obj['cls'] = event.target.className;
+                    obj['innertext'] = event.target.innerText;
+                    obj['attributes'] = {};
+                    for (var kk = 0; kk < event.target.attributes.length; kk++)
+                        obj['attributes'][event.target.attributes[kk].nodeName] = event.target.attributes[kk].nodeValue;
+                    value.push(obj);
+                }
+                else if (event.keyCode == 8) // Backspace
+                {
+                    var obj = {};
+                    obj['action'] = 'press backspace';
+                    var rt = processElement(event.target);
+                    obj['elem'] = rt[0];
+                    obj['ind'] = rt[1];
+                    obj['content'] = '';
+                    obj['tagName'] = event.target.tagName;
+                    obj['cls'] = event.target.className;
+                    obj['innertext'] = event.target.innerText;
                     obj['attributes'] = {};
                     for (var kk = 0; kk < event.target.attributes.length; kk++)
                         obj['attributes'][event.target.attributes[kk].nodeName] = event.target.attributes[kk].nodeValue;
@@ -591,9 +826,13 @@ class WebBrowserPlay:
                 {
                     var obj = {};
                     obj['action'] = 'type';
-                    obj['elem'] = processElement(event.target);
+                    var rt = processElement(event.target);
+                    obj['elem'] = rt[0];
+                    obj['ind'] = rt[1];
                     obj['content'] = event.target.value;
                     obj['tagName'] = event.target.tagName;
+                    obj['cls'] = event.target.className;
+                    obj['innertext'] = event.target.innerText;
                     obj['attributes'] = {};
                     for (var kk = 0; kk < event.target.attributes.length; kk++)
                         obj['attributes'][event.target.attributes[kk].nodeName] = event.target.attributes[kk].nodeValue;
@@ -741,6 +980,22 @@ class WebBrowserPlay:
                 i = i + 1
             except:
                 pass
+
+        # for element in span_elements:
+        #     try:
+        #         button_element = element.text
+        #         try:
+        #             button_element = button_element.strip().replace("\n", " ")
+        #             # print('button is', button_element)
+        #             if button_element != '':
+        #                 button_element = '<button> ' + button_element + '</button' + f'-- input element index = {i}'
+        #                 important_elements.append(button_element)
+        #         except:
+        #             important_elements.append(button_element)
+        #         selenium_elements.append(element)
+        #         i = i + 1
+        #     except:
+        #         pass
 
         return important_elements
 

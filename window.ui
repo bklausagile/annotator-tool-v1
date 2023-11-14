@@ -255,7 +255,7 @@
       <x>200</x>
       <y>190</y>
       <width>271</width>
-      <height>411</height>
+      <height>371</height>
      </rect>
     </property>
    </widget>
@@ -427,6 +427,19 @@
       <width>261</width>
       <height>111</height>
      </rect>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="but_replay">
+    <property name="geometry">
+     <rect>
+      <x>200</x>
+      <y>570</y>
+      <width>271</width>
+      <height>31</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Replay</string>
     </property>
    </widget>
   </widget>
